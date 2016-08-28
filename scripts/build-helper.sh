@@ -41,7 +41,7 @@ do
         HOST_DISTRO_NAME=Darwin
         HOST_DISTRO_LC_NAME=darwin
 
-      elif [ "${HOST_UNAME}" == "Linux" ]
+      elif [ "${HOST_UNAME}" == "Linux" ] || [ "$(uname -o)" == "Cygwin" ] || [ "$(uname -o)" == "Msys" ]
       then
         # ----- Determine distribution name and word size -----
 
