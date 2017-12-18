@@ -1,32 +1,53 @@
-#!/bin/bash
-set -euo pipefail
+#!/usr/bin/env bash
+
+# -----------------------------------------------------------------------------
+# Safety settings (see https://gist.github.com/ilg-ul/383869cbb01f61a51c4d).
+
+if [[ ! -z ${DEBUG} ]]
+then
+  set ${DEBUG} # Activate the expand mode if DEBUG is -x.
+else
+  DEBUG=""
+fi
+
+set -o errexit # Exit if command failed.
+set -o pipefail # Exit if pipe failed.
+set -o nounset # Exit if variable not set.
+
+# Remove the initial space and instead use '\n'.
 IFS=$'\n\t'
+
+# -----------------------------------------------------------------------------
 
 # Script to cross build the 32/64-bit Windows version of Build Tools 
 # with MinGW-w64 on GNU/Linux.
-# Developed on OS X using a Debian 8 x64 Docker container.
+#
+# Developed on OS X 10.12 Sierra.
+# Also tested on:
+#   GNU/Linux Arch (Manjaro 16.08)
+#
+# The Windows packages are build using Debian 8 x64 Docker containers.
 # The build is structured in 2 steps, one running on the host machine
 # and one running inside the Docker container.
-
-# Note: the 64-bits is not yet functional, BusyBox sh.exe fails.
-
+#
 # At first run, Docker will download/build a relatively large
 # image (2.5GB) from Docker Hub.
-
+#
 # Prerequisites:
 #
 #   Docker
-#   curl, git, automake, patch, tar, unzip
+#   curl, git, automake, patch, tar, unzip, zip
 #
-# sudo apt-get install git libtool autoconf automake autotools-dev pkg-config
-# sudo apt-get install texinfo texlive dos2unix nsis
-# sudo apt-get install mingw-w64 mingw-w64-tools mingw-w64-i686-dev 
-# sudo apt-get install autopoint gettext
+# When running on OS X, a custom Homebrew is required to provide the 
+# missing libraries and TeX binaries.
+#
 
 # Mandatory definitions.
 APP_NAME="Windows Build Tools"
 
+# Used as part of file/folder paths.
 APP_LC_NAME="build-tools"
+APP_UC_NAME="Build Tools"
 
 # On Parallels virtual machines, prefer host Work folder.
 # Second choice are Work folders on secondary disks.
@@ -45,19 +66,27 @@ else
   WORK_FOLDER=${WORK_FOLDER:-"${HOME}/Work/${APP_LC_NAME}"}
 fi
 
+BUILD_FOLDER="${WORK_FOLDER}/build"
+
+# ----- Create Work folder. -----
+
+echo
+echo "Work folder: \"${WORK_FOLDER}\"."
+
+mkdir -p "${WORK_FOLDER}"
+
 # ----- Parse actions and command line options. -----
 
 ACTION=""
 DO_BUILD_WIN32=""
 DO_BUILD_WIN64=""
 helper_script=""
-build_scripts_url="https://github.com/gnuarmeclipse/build-scripts/raw/master"
 
 while [ $# -gt 0 ]
 do
   case "$1" in
 
-    clean|pull|checkout-dev|checkout-stable|build-images|preload-images)
+    clean|cleanall|pull|checkout-dev|checkout-stable|build-images|preload-images)
       ACTION="$1"
       shift
       ;;
@@ -81,26 +110,10 @@ do
       shift 2
       ;;
 
-    --build-scripts-url) # Alternate location of build-scripts.
-      build_scripts_url=$2
-      echo
-      echo "build-scripts url: ${build_scripts_url}"
-      echo
-      shift 2
-      ;;
-
-    --work-folder)
-      WORK_FOLDER=$2/Work/${APP_LC_NAME}
-      echo
-      echo "Work Folder: ${WORK_FOLDER}"
-      echo
-      shift 2
-      ;;
-
     --help)
-      echo "Build the GNU ARM Eclipse ${APP_NAME} distributions."
+      echo "Build the GNU MCU Eclipse ${APP_NAME} distributions."
       echo "Usage:"
-      echo "    bash $0 [--helper-script file.sh] [--win32] [--win64] [--all] [clean|pull|checkput-dev|checkout-stable|build-images] [--help]"
+      echo "    bash $0 [--helper-script file.sh] [--win32] [--win64] [--all] [clean|cleanall|pull|checkput-dev|checkout-stable|build-images] [--help]"
       echo
       exit 1
       ;;
@@ -112,13 +125,6 @@ do
   esac
 
 done
-
-# ----- Create Work folder. -----
-
-echo
-echo "Using \"${WORK_FOLDER}\" as Work folder..."
-
-mkdir -p "${WORK_FOLDER}"
 
 # ----- Prepare build scripts. -----
 
@@ -133,15 +139,25 @@ fi
 mkdir -p "${WORK_FOLDER}/scripts"
 cp "${build_script}" "${WORK_FOLDER}/scripts/build-${APP_LC_NAME}.sh"
 
+# ----- Build helper. -----
 
 if [ -z "${helper_script}" ]
 then
-  if [ ! -f "${WORK_FOLDER}/scripts/build-helper.sh" ]
+  script_folder_path="$(dirname ${build_script})"
+  script_folder_name="$(basename ${script_folder_path})"
+  if [ \( "${script_folder_name}" == "scripts" \) \
+    -a \( -f "${script_folder_path}/build-helper.sh" \) ]
   then
-    # Download helper script from SF git.
-    echo "Downloading helper script from ${build_scripts_url}"
-    curl -L "${build_scripts_url}/scripts/build-helper.sh" \
+    helper_script="${script_folder_path}/build-helper.sh"
+  elif [ ! -f "${WORK_FOLDER}/scripts/build-helper.sh" ]
+  then
+    # Download helper script from GitHub git.
+    echo "Downloading helper script..."
+    curl -L "https://github.com/gnu-mcu-eclipse/build-scripts/raw/master/scripts/build-helper.sh" \
       --output "${WORK_FOLDER}/scripts/build-helper.sh"
+    helper_script="${WORK_FOLDER}/scripts/build-helper.sh"
+  else
+    helper_script="${WORK_FOLDER}/scripts/build-helper.sh"
   fi
 else
   if [[ "${helper_script}" != /* ]]
@@ -149,32 +165,82 @@ else
     # Make relative path absolute.
     helper_script="$(pwd)/${helper_script}"
   fi
-
-  # Copy the current helper script to Work area, to later copy it into the install folder.
-  mkdir -p "${WORK_FOLDER}/scripts"
-  if [ "${helper_script}" != "${WORK_FOLDER}/scripts/build-helper.sh" ]
-  then
-    cp "${helper_script}" "${WORK_FOLDER}/scripts/build-helper.sh"
-  fi
 fi
 
-helper_script="${WORK_FOLDER}/scripts/build-helper.sh"
+# Copy the current helper script to Work area, to later copy it into the install folder.
+mkdir -p "${WORK_FOLDER}/scripts"
+if [ "${helper_script}" != "${WORK_FOLDER}/scripts/build-helper.sh" ]
+then
+  cp "${helper_script}" "${WORK_FOLDER}/scripts/build-helper.sh"
+fi
 
-BUILD_FOLDER="${WORK_FOLDER}/build"
+echo "Helper script: \"${helper_script}\"."
+source "$helper_script"
+
+# ----- Library sources. -----
+
+# For updates, please check the corresponding pages.
+
+# The make executable is built using the source package from  
+# the open source MSYS2 project.
+# https://sourceforge.net/projects/msys2/
+
+MSYS2_MAKE_PACK_URL_BASE="http://sourceforge.net/projects/msys2/files"
+
+# http://sourceforge.net/projects/msys2/files/REPOS/MSYS2/Sources/
+# http://sourceforge.net/projects/msys2/files/REPOS/MSYS2/Sources/make-4.1-4.src.tar.gz/download
+
+MAKE_VERSION="4.1"
+MSYS2_MAKE_VERSION_RELEASE="${MAKE_VERSION}-4"
+
+# Warning! 4.2 does not build on Debian 8, it requires gettext-0.19.4.
+# MAKE_VERSION="4.2.1"
+# MSYS2_MAKE_VERSION_RELEASE="${MAKE_VERSION}-1"
+
+MSYS2_MAKE_PACK_ARCH="make-${MSYS2_MAKE_VERSION_RELEASE}.src.tar.gz"
+MSYS2_MAKE_PACK_URL="${MSYS2_MAKE_PACK_URL_BASE}/REPOS/MSYS2/Sources/${MSYS2_MAKE_PACK_ARCH}"
+
+
+# http://intgat.tigress.co.uk/rmy/busybox/index.html
+# https://github.com/rmyorston/busybox-w32
+
+# BUSYBOX_COMMIT=master
+# BUSYBOX_COMMIT="9fe16f6102d8ab907c056c484988057904092c06"
+# BUSYBOX_COMMIT="977d65c1bbc57f5cdd0c8bfd67c8b5bb1cd390dd"
+# BUSYBOX_COMMIT="9fa1e4990e655a85025c9d270a1606983e375e47"
+BUSYBOX_COMMIT="c2002eae394c230d6b89073c9ff71bc86a7875e8"
+
+BUSYBOX_ARCHIVE="${BUSYBOX_COMMIT}.zip"
+BUSYBOX_URL="https://github.com/rmyorston/busybox-w32/archive/${BUSYBOX_ARCHIVE}"
+
+BUSYBOX_SRC_FOLDER="${WORK_FOLDER}/busybox-w32-${BUSYBOX_COMMIT}"
+
 
 # ----- Process actions. -----
 
-if [ "${ACTION}" == "clean" ]
+if [ \( "${ACTION}" == "clean" \) -o \( "${ACTION}" == "cleanall" \) ]
 then
   # Remove most build and temporary folders.
   echo
-  echo "Remove most of the build folders..."
+  if [ "${ACTION}" == "cleanall" ]
+  then
+    echo "Remove all the build folders..."
+  else
+    echo 'Remove most of the build folders (except output)...'
+  fi
 
   rm -rf "${BUILD_FOLDER}"
+  rm -rf "${WORK_FOLDER}/install"
+
   rm -rf "${WORK_FOLDER}/msys2"
   rm -rf "${WORK_FOLDER}/install"
 
   rm -rf "${WORK_FOLDER}/scripts"
+
+  if [ "${ACTION}" == "cleanall" ]
+  then
+    rm -rf "${WORK_FOLDER}/output"
+  fi
 
   echo
   echo "Clean completed. Proceed with a regular build."
@@ -184,29 +250,27 @@ fi
 
 # ----- Start build. -----
 
-source "$helper_script" --start-timer
+do_host_start_timer
 
-source "$helper_script" --detect-host
+do_host_detect
 
 # ----- Define build constants. -----
 
-GIT_FOLDER="${WORK_FOLDER}/gnuarmeclipse-${APP_LC_NAME}.git"
+GIT_FOLDER="${WORK_FOLDER}/gnu-mcu-eclipse-${APP_LC_NAME}.git"
 
 DOWNLOAD_FOLDER="${WORK_FOLDER}/download"
 
+
 # ----- Prepare prerequisites. -----
 
-source "$helper_script" --prepare-prerequisites
-
-if [ -n "${DO_BUILD_WIN32}${DO_BUILD_WIN64}" ]
-then
-  source "$helper_script" --prepare-docker
-fi
+do_host_prepare_prerequisites
 
 # ----- Process "preload-images" action. -----
 
 if [ "${ACTION}" == "preload-images" ]
 then
+  do_host_prepare_docker
+
   echo
   echo "Check/Preload Docker images..."
 
@@ -217,7 +281,7 @@ then
   echo
   docker images
 
-  source "$helper_script" "--stop-timer"
+  do_host_stop_timer
 
   exit 0
 fi
@@ -241,9 +305,16 @@ then
 
   docker images
 
-  source "$helper_script" "--stop-timer"
+  do_host_stop_timer
 
   exit 0
+fi
+
+# ----- Prepare Docker. -----
+
+if [ -n "${DO_BUILD_WIN32}${DO_BUILD_WIN64}" ]
+then
+  do_host_prepare_docker
 fi
 
 # ----- Check some more prerequisites. -----
@@ -260,10 +331,10 @@ tar --version
 echo "Checking host unzip..."
 unzip | grep UnZip
 
-# ----- Get the GNU ARM Eclipse Build Tools git repository. -----
+# ----- Get the GNU MCU Eclipse Build Tools git repository. -----
 
 # The custom Build Tools is available from the dedicated Git repository
-# which is part of the GNU ARM Eclipse project hosted on SourceForge.
+# which is part of the GNU MCU Eclipse project hosted on SourceForge.
 
 if [ ! -d "${GIT_FOLDER}" ]
 then
@@ -274,23 +345,23 @@ then
   then
     # Shortcut for ilg, who has full access to the repo.
     echo
-    echo "Enter SourceForge password for git clone"
-    git clone ssh://ilg-ul@git.code.sf.net/p/gnuarmeclipse/${APP_LC_NAME} gnuarmeclipse-${APP_LC_NAME}.git
+    echo "If asked, enter ${USER} GitHub password for git clone"
+    git clone https://github.com/gnu-mcu-eclipse/build-tools.git gnu-mcu-eclipse-${APP_LC_NAME}.git
   else
     # For regular read/only access, use the git url.
-    git clone http://git.code.sf.net/p/gnuarmeclipse/${APP_LC_NAME} gnuarmeclipse-${APP_LC_NAME}.git
+    git clone http://github.com/gnu-mcu-eclipse/build-tools.git gnu-mcu-eclipse-${APP_LC_NAME}.git
   fi
 
 fi
 
 # ----- Get the current Git branch name. -----
 
-# source "$helper_script" "--get-git-head"
+# do_host_get_git_head
 
 
 # ----- Get current date. -----
 
-source "$helper_script" "--get-current-date"
+do_host_get_current_date
 
 # ----- Get make. -----
 
@@ -298,23 +369,12 @@ source "$helper_script" "--get-current-date"
 # the open source MSYS2 project.
 # https://sourceforge.net/projects/msys2/
 
-MSYS2_MAKE_PACK_URL_BASE="http://sourceforge.net/projects/msys2/files"
-
-# http://sourceforge.net/projects/msys2/files/REPOS/MSYS2/Sources/
-# http://sourceforge.net/projects/msys2/files/REPOS/MSYS2/Sources/make-4.1-3.src.tar.gz/download
-
-
-MAKE_VERSION="4.1"
-MSYS2_MAKE_VERSION_RELEASE="${MAKE_VERSION}-4"
-
-MSYS2_MAKE_PACK_ARCH="make-${MSYS2_MAKE_VERSION_RELEASE}.src.tar.gz"
-MSYS2_MAKE_PACK_URL="${MSYS2_MAKE_PACK_URL_BASE}/REPOS/MSYS2/Sources/${MSYS2_MAKE_PACK_ARCH}"
-
 if [ ! -f "${DOWNLOAD_FOLDER}/${MSYS2_MAKE_PACK_ARCH}" ]
 then
   mkdir -p "${DOWNLOAD_FOLDER}"
 
   cd "${DOWNLOAD_FOLDER}"
+  echo "Downloading \"${MSYS2_MAKE_PACK_ARCH}\"..."
   curl -L "${MSYS2_MAKE_PACK_URL}" \
     --output "${MSYS2_MAKE_PACK_ARCH}"
 fi
@@ -330,25 +390,20 @@ then
   tar -xvf "${DOWNLOAD_FOLDER}/${MSYS2_MAKE_PACK_ARCH}"
 fi
 
+# The actual unpack will be done later, directly in the build folder.
 
 # ----- Get BusyBox. -----
 
 # http://intgat.tigress.co.uk/rmy/busybox/index.html
-# https://github.com/rmyorston/busybox-w32
-
-BUSYBOX_COMMIT="9fe16f6102d8ab907c056c484988057904092c06"
-# BUSYBOX_COMMIT=master
-BUSYBOX_ARCHIVE="${BUSYBOX_COMMIT}.zip"
-BUSYBOX_URL="https://github.com/rmyorston/busybox-w32/archive/${BUSYBOX_ARCHIVE}"
-
-BUSYBOX_SRC_FOLDER="${WORK_FOLDER}/busybox-w32-${BUSYBOX_COMMIT}"
 
 if [ ! -f "${DOWNLOAD_FOLDER}/${BUSYBOX_ARCHIVE}" ]
 then
   cd "${DOWNLOAD_FOLDER}"
+  echo "Downloading \"${BUSYBOX_ARCHIVE}\"..."
   curl -L "${BUSYBOX_URL}" --output "${BUSYBOX_ARCHIVE}"
 fi
 
+# The unpack will be done later, directly in the build folder.
 
 # v===========================================================================v
 # Create the build script (needs to be separate for Docker).
@@ -360,14 +415,38 @@ rm -f "${script_file}"
 mkdir -p "$(dirname ${script_file})"
 touch "${script_file}"
 
+# Note: EOF is quoted to prevent substitutions here.
+cat <<'EOF' >> "${script_file}"
+#!/usr/bin/env bash
+
+# -----------------------------------------------------------------------------
+# Safety settings (see https://gist.github.com/ilg-ul/383869cbb01f61a51c4d).
+
+if [[ ! -z ${DEBUG} ]]
+then
+  set -x # Activate the expand mode if DEBUG is anything but empty.
+else
+  DEBUG=""
+fi
+
+set -o errexit # Exit if command failed.
+set -o pipefail # Exit if pipe failed.
+set -o nounset # Exit if variable not set.
+
+# Remove the initial space and instead use '\n'.
+IFS=$'\n\t'
+
+# -----------------------------------------------------------------------------
+
+EOF
+# The above marker must start in the first column.
+
 # Note: EOF is not quoted to allow local substitutions.
 cat <<EOF >> "${script_file}"
-#!/bin/bash
-set -euo pipefail
-IFS=\$'\n\t'
 
 APP_NAME="${APP_NAME}"
 APP_LC_NAME="${APP_LC_NAME}"
+APP_UC_NAME="${APP_UC_NAME}"
 DISTRIBUTION_FILE_DATE="${DISTRIBUTION_FILE_DATE}"
 
 MAKE_VERSION="${MAKE_VERSION}"
@@ -377,6 +456,16 @@ BUSYBOX_COMMIT="${BUSYBOX_COMMIT}"
 BUSYBOX_ARCHIVE="${BUSYBOX_ARCHIVE}"
 
 EOF
+# The above marker must start in the first column.
+
+# Propagate DEBUG to guest.
+set +u
+if [[ ! -z ${DEBUG} ]]
+then
+  echo "DEBUG=${DEBUG}" "${script_file}"
+  echo
+fi
+set -u
 
 # Note: EOF is quoted to prevent substitutions here.
 cat <<'EOF' >> "${script_file}"
@@ -434,13 +523,25 @@ do
       helper_script="$2"
       shift 2
       ;;
+    --group-id)
+      group_id="$2"
+      shift 2
+      ;;
+    --user-id)
+      user_id="$2"
+      shift 2
+      ;;
+    --host-uname)
+      host_uname="$2"
+      shift 2
+      ;;
     *)
       echo "Unknown option $1, exit."
       exit 1
   esac
 done
 
-git_folder="${work_folder}/gnuarmeclipse-${APP_LC_NAME}.git"
+git_folder="${work_folder}/gnu-mcu-eclipse-${APP_LC_NAME}.git"
 
 echo
 uname -a
@@ -487,22 +588,24 @@ unix2dos --version 2>&1 | grep unix2dos
 echo "Checking makensis..."
 echo "makensis $(makensis -VERSION)"
 
-echo "Checking md5sum..."
-md5sum --version
+echo "Checking shasum..."
+shasum --version
+
+apt-get --yes install zip
+
+echo "Checking zip..."
+zip -v | grep "This is Zip"
 
 # ----- Remove and recreate the output folder. -----
 
 rm -rf "${output_folder}"
 mkdir -p "${output_folder}"
 
-# ----- Create the build folder. -----
-
-mkdir -p "${build_folder}/${APP_LC_NAME}"
-
 
 # ----- Build make. -----
 
 make_build_folder="${build_folder}/make-${MAKE_VERSION}"
+
 if [ ! -d "${make_build_folder}" ]
 then
   mkdir -p "${build_folder}"
@@ -510,14 +613,21 @@ then
   cd "${build_folder}"
   echo
   echo "Unpacking ${MAKE_ARCH}..."
+  set +e
   tar -xvf "${work_folder}/msys2/make/${MAKE_ARCH}"
+  set -e
 
   cd "${make_build_folder}"
-  patch -p1 -i "${work_folder}/msys2/make/make-autoconf.patch"
+  if [ -f "${work_folder}/msys2/make/make-autoconf.patch" ]
+  then
+    patch -p1 -i "${work_folder}/msys2/make/make-autoconf.patch"
+  fi
 fi
 
 if [ ! -f "${make_build_folder}/config.h" ]
 then
+
+  cd "${make_build_folder}"
 
   echo
   echo "Running make autoreconf..."
@@ -553,7 +663,7 @@ rm -rf "${install_folder}"
 make install \
 | tee "${output_folder}/make-install-output.txt"
 
-do_strip ${cross_compile_prefix}-strip "${install_folder}/make-${MAKE_VERSION}/bin/make.exe"
+${cross_compile_prefix}-strip "${install_folder}/make-${MAKE_VERSION}/bin/make.exe"
 
 # ----- Copy files to the install bin folder -----
 
@@ -562,18 +672,9 @@ mkdir -p "${install_folder}/${APP_LC_NAME}/bin"
 cp -v "${install_folder}/make-${MAKE_VERSION}/bin/make.exe" \
  "${install_folder}/${APP_LC_NAME}/bin"
 
-echo
-echo "Copying DLLs..."
+# ----- Copy dynamic libraries to the install bin folder. -----
 
-if [ "${target_bits}" == "32" ]
-then
-  ls -l "/usr/${cross_compile_prefix}/bin/"*.dll
-  cp -v "/usr/${cross_compile_prefix}/bin/intl.dll" "${install_folder}/${APP_LC_NAME}/bin"
-elif [ "${target_bits}" == "64" ]
-then
-  cp -v "/usr/${cross_compile_prefix}/bin/libintl-8.dll" "${install_folder}/${APP_LC_NAME}/bin"
-  cp -v "/usr/${cross_compile_prefix}/bin/libiconv-2.dll" "${install_folder}/${APP_LC_NAME}/bin"
-fi
+# No DLLs required.
 
 # ----- Build BusyBox. -----
 
@@ -591,19 +692,19 @@ then
     cd "${busybox_build_folder}/configs"
     sed \
     -e 's/CONFIG_CROSS_COMPILER_PREFIX=".*"/CONFIG_CROSS_COMPILER_PREFIX="i686-w64-mingw32-"/' \
-    <mingw32_defconfig >gnuarmeclipse_32_mingw_defconfig
+    <mingw32_defconfig >gnu-mcu-eclipse_32_mingw_defconfig
 
     sed \
     -e 's/CONFIG_CROSS_COMPILER_PREFIX=".*"/CONFIG_CROSS_COMPILER_PREFIX="x86_64-w64-mingw32-"/' \
-    <mingw32_defconfig >gnuarmeclipse_64_mingw_defconfig
+    <mingw32_defconfig >gnu-mcu-eclipse_64_mingw_defconfig
 
   fi
 
   echo 
-  echo "Running BusyBox make gnuarmeclipse_${target_bits}_mingw_defconfig..."
+  echo "Running BusyBox make gnu-mcu-eclipse_${target_bits}_mingw_defconfig..."
 
   cd "${busybox_build_folder}"
-  make "gnuarmeclipse_${target_bits}_mingw_defconfig"
+  make "gnu-mcu-eclipse_${target_bits}_mingw_defconfig"
 
 fi
 
@@ -612,6 +713,9 @@ then
 
   echo 
   echo "Running BusyBox make..."
+
+  # Not used.
+  cflags="-Wno-format-extra-args -Wno-format -Wno-overflow -Wno-unused-variable -Wno-implicit-function-declaration -Wno-unused-parameter -Wno-maybe-uninitialized -Wno-pointer-to-int-cast -Wno-strict-prototypes -Wno-old-style-definition -Wno-implicit-function-declaration"
 
   cd "${busybox_build_folder}"
   if [ ${target_bits} == "32" ]
@@ -632,96 +736,75 @@ echo "Installing BusyBox..."
 
 mkdir -p "${install_folder}/build-tools/bin"
 cp -v "${busybox_build_folder}/busybox.exe" "${install_folder}/build-tools/bin/busybox.exe"
-do_strip ${cross_compile_prefix}-strip "${install_folder}/build-tools/bin/busybox.exe"
+${cross_compile_prefix}-strip "${install_folder}/build-tools/bin/busybox.exe"
 
 cp -v "${install_folder}/build-tools/bin/busybox.exe" "${install_folder}/build-tools/bin/sh.exe"
 cp -v "${install_folder}/build-tools/bin/busybox.exe" "${install_folder}/build-tools/bin/rm.exe"
 cp -v "${install_folder}/build-tools/bin/busybox.exe" "${install_folder}/build-tools/bin/echo.exe"
+cp -v "${install_folder}/build-tools/bin/busybox.exe" "${install_folder}/build-tools/bin/mkdir.exe"
 
 # ----- Copy the license files. -----
 
 echo
 echo "Copying license files..."
 
-do_copy_license "${make_build_folder}" "make-${MAKE_VERSION}"
-do_copy_license "${busybox_build_folder}" "busybox"
+do_container_copy_license "${make_build_folder}" "make-${MAKE_VERSION}"
+do_container_copy_license "${busybox_build_folder}" "busybox"
 
 # For Windows, process cr lf
 find "${install_folder}/${APP_LC_NAME}/license" -type f \
   -exec unix2dos {} \;
 
 
-# ----- Copy the GNU ARM Eclipse info files. -----
+# ----- Copy the GNU MCU Eclipse info files. -----
 
 echo 
 echo "Copying info files..."
 
-mkdir -p "${install_folder}/build-tools/gnuarmeclipse"
+mkdir -p "${install_folder}/build-tools/gnu-mcu-eclipse"
 
-cp -v "${git_folder}/gnuarmeclipse/info/INFO.txt" \
+cp -v "${git_folder}/gnu-mcu-eclipse/info/INFO.txt" \
   "${install_folder}/build-tools/INFO.txt"
-unix2dos "${install_folder}/build-tools/INFO.txt"
-cp -v "${git_folder}/gnuarmeclipse/info/BUILD.txt" \
-  "${install_folder}/build-tools/gnuarmeclipse/BUILD.txt"
-unix2dos "${install_folder}/build-tools/gnuarmeclipse/BUILD.txt"
-cp -v "${git_folder}/gnuarmeclipse/info/CHANGES.txt" \
-  "${install_folder}/build-tools/gnuarmeclipse/"
-unix2dos "${install_folder}/build-tools/gnuarmeclipse/CHANGES.txt"
+do_unix2dos "${install_folder}/build-tools/INFO.txt"
+cp -v "${git_folder}/gnu-mcu-eclipse/info/BUILD.txt" \
+  "${install_folder}/build-tools/gnu-mcu-eclipse/BUILD.txt"
+do_unix2dos "${install_folder}/build-tools/gnu-mcu-eclipse/BUILD.txt"
+cp -v "${git_folder}/gnu-mcu-eclipse/info/CHANGES.txt" \
+  "${install_folder}/build-tools/gnu-mcu-eclipse/"
+do_unix2dos "${install_folder}/build-tools/gnu-mcu-eclipse/CHANGES.txt"
 
 # Copy the current build script
 cp -v "${work_folder}/scripts/build-${APP_LC_NAME}.sh" \
-  "${install_folder}/${APP_LC_NAME}/gnuarmeclipse/build-${APP_LC_NAME}.sh"
-do_unix2dos "${install_folder}/${APP_LC_NAME}/gnuarmeclipse/build-${APP_LC_NAME}.sh"
+  "${install_folder}/${APP_LC_NAME}/gnu-mcu-eclipse/build-${APP_LC_NAME}.sh"
+do_unix2dos "${install_folder}/${APP_LC_NAME}/gnu-mcu-eclipse/build-${APP_LC_NAME}.sh"
 
 # Copy the current build helper script
 cp -v "${work_folder}/scripts/build-helper.sh" \
-  "${install_folder}/${APP_LC_NAME}/gnuarmeclipse/build-helper.sh"
-do_unix2dos "${install_folder}/${APP_LC_NAME}/gnuarmeclipse/build-helper.sh"
+  "${install_folder}/${APP_LC_NAME}/gnu-mcu-eclipse/build-helper.sh"
+do_unix2dos "${install_folder}/${APP_LC_NAME}/gnu-mcu-eclipse/build-helper.sh"
 
 cp -v "${output_folder}/config.log" \
-  "${install_folder}/${APP_LC_NAME}/gnuarmeclipse/config.log"
-do_unix2dos "${install_folder}/${APP_LC_NAME}/gnuarmeclipse/config.log"
+  "${install_folder}/${APP_LC_NAME}/gnu-mcu-eclipse/config.log"
+do_unix2dos "${install_folder}/${APP_LC_NAME}/gnu-mcu-eclipse/config.log"
 
 # Not passed as is, used by makensis for the MUI_PAGE_LICENSE; must be DOS.
 cp -v "${git_folder}/COPYING" \
   "${install_folder}/build-tools/COPYING"
-unix2dos "${install_folder}/build-tools/COPYING"
+do_unix2dos "${install_folder}/build-tools/COPYING"
 
 
 # ----- Create the distribution setup. -----
 
 mkdir -p "${output_folder}"
 
-echo
-echo "Creating setup..."
-echo
+distribution_file_version=$(cat "${git_folder}/gnu-mcu-eclipse/VERSION")-${DISTRIBUTION_FILE_DATE}
 
-distribution_file_version=$(cat "${git_folder}/gnuarmeclipse/VERSION")-${DISTRIBUTION_FILE_DATE}
-distribution_file="${distribution_folder}/gnuarmeclipse-${APP_LC_NAME}-${target_folder}-${distribution_file_version}-setup.exe"
+distribution_executable_name="make"
 
-# Not passed as it, used by makensis for the MUI_PAGE_LICENSE; must be DOS.
-cp "${git_folder}/COPYING" \
-  "${install_folder}/${APP_LC_NAME}/COPYING"
-unix2dos "${install_folder}/${APP_LC_NAME}/COPYING"
-
-nsis_folder="${git_folder}/gnuarmeclipse/nsis"
-nsis_file="${nsis_folder}/gnuarmeclipse-${APP_LC_NAME}.nsi"
-
-cd "${build_folder}"
-makensis -V4 -NOCD \
-  -DINSTALL_FOLDER="${install_folder}/${APP_LC_NAME}" \
-  -DNSIS_FOLDER="${nsis_folder}" \
-  -DOUTFILE="${distribution_file}" \
-  -DW${target_bits} \
-  -DBITS=${target_bits} \
-  -DVERSION=${distribution_file_version} \
-  "${nsis_file}"
-result="$?"
-
-do_compute_md5 "md5sum" "-t" "${distribution_file}"
+do_container_create_distribution
 
 # Requires ${distribution_file} and ${result}
-source "$helper_script" --completed
+do_container_completed
 
 exit 0
 
@@ -735,25 +818,25 @@ EOF
 
 if [ "${DO_BUILD_WIN64}" == "y" ]
 then
-  do_build_target "Creating Windows 64-bits setup..." \
+  do_host_build_target "Creating Windows 64-bits setup..." \
     --target-name win \
     --target-bits 64 \
-    --docker-image ilegeul/debian:8-gnuarm-mingw
+    --docker-image "ilegeul/debian:8-gnuarm-mingw-v2"
 fi
 
 # ----- Build the Windows 32-bits distribution. -----
 
 if [ "${DO_BUILD_WIN32}" == "y" ]
 then
-  do_build_target "Creating Windows 32-bits setup..." \
+  do_host_build_target "Creating Windows 32-bits setup..." \
     --target-name win \
     --target-bits 32 \
-    --docker-image ilegeul/debian:8-gnuarm-mingw
+    --docker-image "ilegeul/debian:8-gnuarm-mingw-v2"
 fi
 
-cat "${WORK_FOLDER}/output/"*.md5
+do_host_show_sha
 
-source "$helper_script" "--stop-timer"
+do_host_stop_timer
 
 # ----- Done. -----
 exit 0

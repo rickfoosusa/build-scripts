@@ -7,11 +7,11 @@
 [ -n "${USER}" ] || USER=$(whoami)
 
 # windows install folder blank for default.
-[ -n "${win_install_folder}" ] || win_install_folder="C:\\AmbiqMicro\\OpenOCD"
+[ -n "${win_install_folder}" ] || win_install_folder="~/openocd-win"
 # Git Development URL
-[ -n "${git_dev_url}" ] || git_dev_url=ssh://git@192.168.29.73/utilities/openocd.git
+[ -n "${git_dev_url}" ] || git_dev_url=ssh://gitolite3@localhost/openocd.git
 # Git Release URL
-[ -n "${git_rel_url}" ] || git_rel_url=ssh://git@192.168.29.73/utilities/openocd.git
+[ -n "${git_rel_url}" ] || git_rel_url=ssh://gitolite3@localhost/openocd.git
 # Git project (dev/rel)
 [ -n "${git_project_branch}" ] || git_project_branch=gnuarmeclipse
 # Git development user
@@ -19,7 +19,8 @@
 # Git development build user.
 [ -n "${git_devbuild_user}" ] || git_devbuild_user=${USER}
 # Location of build-scripts.
-[ -n "${build_scripts_url}" ] || build_scripts_url="https://github.com/rickfoosusa/build-scripts/raw/master"
+#[ -n "${build_scripts_url}" ] || build_scripts_url="https://github.com/rickfoosusa/build-scripts/raw/master"
+[ -n "${build_scripts_url}" ] || build_scripts_url="file:///home/rick/build-scripts"
 
 # Clean old git checkout
 sudo rm -rf ${WORKSPACE}/Work/openocd/gnuarmeclipse-openocd.git
