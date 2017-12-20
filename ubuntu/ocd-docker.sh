@@ -2,6 +2,9 @@
 # Rick Foos <rfoos at solengtech.com>
 # Packages to do a docker build of OpenOCD on Ubuntu.
 
+prompt_install="Do you want to install these packages now (y|n)?"
+prompt_please="\nPlease answer y, or n\n"
+
 cat << EOM
 Root or Sudo priviledges are required to do this. If you do not have
 sufficient priviledge, copy the install command from above, and have

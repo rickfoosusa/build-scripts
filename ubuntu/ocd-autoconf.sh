@@ -4,7 +4,7 @@
 # Packages to do an autoconf build of OpenOCD on fresh LTS Ubuntu.
 
 prompt_install="Do you want to install these packages now (y|n)?"
-prompt_please="\nPlease answer y, or n"
+prompt_please="\nPlease answer y, or n\n"
 
 cat << EOM
 Root or Sudo priviledges are required to do this. If you do not have
