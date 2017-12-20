@@ -25,7 +25,8 @@ done
 sudo apt-get -y update && sudo apt-get -y upgrade && \
 sudo apt-get -y install openssh-server build-essential gcc g++ git make \
     m4 python tar zip unzip bzip2 libtool pkg-config automake \
-    autoconf autotools-dev gettext texinfo texlive flex doxygen graphviz \
+    autoconf autotools-dev gettext texinfo texlive flex doxygen \
+    graphviz libusb-dev libftdi1-dev \
     dos2unix libusb-1.0-0-dev libusb-1.0-0 libftdi1 libftdi1-2 \
     libhidapi-dev libhidapi-hidraw0 libhidapi-libusb0
     
