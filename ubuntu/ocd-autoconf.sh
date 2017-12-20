@@ -16,7 +16,7 @@ EOM
 while true; do
 read -r -p  "${prompt_install}" yn
 case $yn in
-    [Yy]* ) echo "Starting package install (sudo required)."; break;;
+    [Yy]* ) printf "\nStarting package install (sudo required).\n"; break;;
     [Nn]* ) printf "\nInstall canceled.\n"; exit 0;;
     * )     printf "${prompt_please}";;
 esac
